@@ -73,7 +73,7 @@ class SnapTVH:
         mpvargs="",
         mpvpipe="/tmp/mpvpipe",
         cachedir="~/.local/cache/snaptvh",
-        command_port=2000
+        command_port=2000,
     ):
         super(SnapTVH, self).__init__()
         self.host = f"http://{server}:{port}"
@@ -106,11 +106,11 @@ class SnapTVH:
         self._properties["canGoNext"] = True
         self._properties["canGoPrevious"] = True
         self._properties["canPlay"] = True
-        self._properties["canPause"] = False
+        self._properties["canPause"] = True
         self._properties["canSeek"] = False
         self._properties["canControl"] = True
 
-        self._last_played = "BBC ONE South"
+        self._last_played = ""
 
         self._cmd_server_ready = asyncio.Event()
 
@@ -206,7 +206,9 @@ class SnapTVH:
             if not message:
                 break
             command, _, args = message.partition(" ")
-            await self.parse_cmd(command, args, writer)
+            loop = await self.parse_cmd(command, args, writer)
+            if not loop:
+                break
 
         writer.close()
 
@@ -251,6 +253,14 @@ class SnapTVH:
         r = requests.get(f"{self.host}/playlist")
         with open(self.channels_file, "wb") as c_list:
             c_list.write(r.content)
+
+    def search_epg(self, keyword):
+        params = {"mode": "now", "fulltext": 1, "title": keyword}
+        r = requests.get(f"{self.host}{EPG}", auth=self.auth, params=params)
+        if r.status_code != 200:
+            raise ValueError("Couldn't get EPG data.")
+
+        return r.json().get("entries", False)
 
     def set_now_playing(self, channel):
         if not self.proc:
@@ -398,12 +408,37 @@ class SnapTVH:
                     writer.write(f"Playing: {self._last_played}\n".encode())
                 else:
                     writer.write("Not playing.\n".encode())
+            case "pause":
+                await self.stop()
             case "stop":
                 await self.stop()
             case "play":
-                await self.play(args)
+                if args:
+                    await self.play(args)
+                else:
+                    await self.last_played()
+            case "quit":
+                return False
+            case "search":
+                if not args:
+                    return True
+
+                try:
+                    entries = self.search_epg(args)
+                except ValueError as e:
+                    writer.write(f"{e}\n".encode())
+                    return True
+
+                for entry in entries:
+                    writer.write(
+                        "{channelName}\n{title}\n{subtitle}\n\n".format(
+                            **entry
+                        ).encode()
+                    )
             case _:
                 pass
+
+        return True
 
     async def parse_json_cmd(self, line):
         try:
@@ -421,12 +456,9 @@ class SnapTVH:
                 case "Control":
                     match params["command"]:
                         case "play":
-                            await self.log(f"Received 'play'. {json.dumps(params)}")
-                            # if params.get("params", False):
-                            #     return f"play {params["params"]["channel"]}"
                             await self.last_played()
                         case "pause":
-                            pass
+                            await self.stop()
                         case "playPause":
                             pass
                         case "stop":
