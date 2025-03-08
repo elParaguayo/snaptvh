@@ -319,9 +319,6 @@ class SnapTVH:
         return self.proc.returncode is None
 
     async def _start_mpv(self, cmd):
-        if self.proc:
-            await self.stop()
-
         self.proc = await asyncio.create_subprocess_exec(
             *cmd, stdin=DN, stdout=DN, stderr=DN
         )
@@ -371,13 +368,16 @@ class SnapTVH:
 
         channel = [c for c in self.channels if channel_name.lower() == c.lower()][0]
 
+        await self.stop()
         await self._play_channel(channel)
 
     async def stop(self):
         """Stops the playing channel."""
         if self.proc:
             self.proc.terminate()
-            self.proc = None
+            # self.proc will be cleared by the running listener
+            while self.proc is not None:
+                await asyncio.sleep(0.01)
 
         if self.mpvwriter is not None:
             self.mpvwriter.close()
